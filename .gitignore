@@ -1,0 +1,12 @@
+# 本機設定（含原稿路徑、同步網址、加密用 salt），不上傳
+local.config.json
+
+# 填好雜湊值的 Apps Script，只拿來貼到 Google，不需要進版控
+apps-script/Code.generated.gs
+
+# 測試輸出與測試資料
+dist-test/
+dev/mock-db.json
+
+__pycache__/
+.DS_Store

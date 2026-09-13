@@ -1,0 +1,8 @@
+{
+  "manual_dir": "../new-chat/manual",
+  "additions_py": "../new-chat/work/additions.py",
+  "photos_json": "../new-chat/work/photos.json",
+  "title": "旅行說明書",
+  "subtitle": "出發日期 ・ 同行人數（只出現在加密後的網頁裡）",
+  "sync_url": ""
+}
