@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#193D37">
+<title>家庭旅行說明書</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<main id="lock" class="lock">
+  <div class="lock-card">
+    <p class="eyebrow">FAMILY TRAVEL</p>
+    <h1>家庭旅行說明書</h1>
+    <p class="hint">輸入家庭密碼打開。內容已加密，只有知道密碼的人看得到。</p>
+    <form id="lock-form">
+      <label class="sr" for="lock-pw">家庭密碼</label>
+      <input id="lock-pw" type="password" autocomplete="current-password" placeholder="家庭密碼" required>
+      <label class="rem"><input id="lock-remember" type="checkbox" checked> 在這台裝置記住，下次不用再輸入</label>
+      <button type="submit">打開說明書</button>
+    </form>
+    <p id="lock-msg" class="msg" role="status"></p>
+  </div>
+</main>
+<div id="app" hidden></div>
+<script id="payload" type="application/json">{{PAYLOAD}}</script>
+<script>{{APPJS}}</script>
+<script>
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(function () {});
+}
+</script>
+</body>
+</html>
