@@ -19,6 +19,24 @@
   function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
   function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
   function hhmm(t) { var d = new Date(t); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+  function pad(n) { return ('0' + n).slice(-2); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  // 搜尋時一個區塊算一筆：標題、段落、勾選項、表格列、提醒…；已經填的答案也搜得到
+  var BLOCKS = ['h2', 'h3', 'p', '.task', 'tr', '.note', '.pb', '.meta', '.goal']
+    .map(function (s) { return '#app section.chap ' + s; }).join(',');
+  function textOf(el) {
+    var t = '';
+    (function walk(n) {
+      if (n.nodeType === 3) { t += n.nodeValue; return; }
+      if (n.nodeType !== 1) return;
+      if (n.tagName === 'SELECT') { t += ' ' + n.value + ' '; return; }
+      if (n.tagName === 'INPUT') { if (n.type === 'text' && n.value) t += ' ' + n.value + ' '; return; }
+      for (var c = n.firstChild; c; c = c.nextSibling) walk(c);
+      if (!/^(B|STRONG|EM|I|MARK|A)$/.test(n.tagName)) t += ' ';
+    })(el);
+    return t.replace(/\s+/g, ' ').trim();
+  }
 
   var P = JSON.parse($('#payload').textContent);
 
@@ -94,6 +112,7 @@
       this.s = lsGet(STORE, { values: {}, dirty: {}, who: '', last: 0 });
       this.state = 'idle';
       this.bind();
+      this.nav(data);
       this.applyAll();
       if (!this.s.who) setTimeout(function () { self.askWho(); }, 300);
       this.renderStatus();
@@ -110,7 +129,7 @@
       var self = this, app = $('#app');
       app.addEventListener('change', function (ev) {
         var el = ev.target;
-        if (el.matches('input[type="checkbox"][data-id]')) self.local(el, false);
+        if (el.matches('input[type="checkbox"][data-id], select[data-id]')) self.local(el, false);
       });
       app.addEventListener('input', function (ev) {
         var el = ev.target;
@@ -139,8 +158,10 @@
     // 正在輸入的欄位會被標成待同步，merge 會跳過它，所以這裡不用再擋游標所在的欄位；
     // 只在值真的不同時才更新，避免游標跳到最後
     write: function (el, v) {
-      if (el.type === 'checkbox') el.checked = (v === '✓' || v === '1');
-      else if (el.value !== v) el.value = v;
+      if (el.type === 'checkbox') { el.checked = (v === '✓' || v === '1'); return; }
+      // 原稿改過選項後，已經選過的舊答案還是要看得到
+      if (el.tagName === 'SELECT' && v && !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) el.add(new Option(v, v));
+      if (el.value !== v) el.value = v;
     },
 
     applyAll: function () {
@@ -244,6 +265,164 @@
         }
       });
       if (changed) this.refresh();
+    },
+
+    // ---------- 導覽：下方導覽列、目錄與搜尋、今天、上一章／下一章 ----------
+
+    nav: function (data) {
+      var self = this, sheet = $('#sheet');
+      if (!sheet) return;
+      this.plan = (data.config && data.config.today) || null;
+      this.chaps = $$('#app section.chap').map(function (s) {
+        var h = $('h2', s), cid = $('.cid', h);
+        return { id: s.getAttribute('data-chap'), el: s, title: h.textContent.slice(cid ? cid.textContent.length : 0).trim() };
+      });
+      this.chaps.forEach(function (c, i) {
+        var p = self.chaps[i - 1], n = self.chaps[i + 1], el = document.createElement('nav');
+        el.className = 'chnav';
+        el.setAttribute('aria-label', '上一章與下一章');
+        el.innerHTML = (p ? '<a class="pv" href="#c' + p.id + '">← ' + p.id + ' ' + esc(p.title) + '</a>' : '')
+          + (n ? '<a class="nx" href="#c' + n.id + '">' + n.id + ' ' + esc(n.title) + ' →</a>' : '');
+        c.el.appendChild(el);
+      });
+      if (!this.plan) $('#nav-today').hidden = true;
+      // 目錄：一鍵回到頁首的目錄，剛剛讀到的那一章會標出來
+      $('#nav-toc').addEventListener('click', function () {
+        var t = $('#toc');
+        if (t) { t.scrollIntoView({ block: 'start' }); self.track(); }
+      });
+      $('#nav-find').addEventListener('click', function () { self.openSheet(true); });
+      $('#nav-today').addEventListener('click', function () { self.today(); });
+      $('#sheet-x').addEventListener('click', function () { self.closeSheet(); });
+      $('#q').addEventListener('input', function () { self.search(this.value); });
+      sheet.addEventListener('click', function (ev) {
+        if (ev.target === sheet) { self.closeSheet(); return; }
+        var a = ev.target.closest('a');
+        if (!a) return;
+        ev.preventDefault();
+        var k = a.getAttribute('data-k');
+        var el = k !== null ? self.hits[+k].el : document.getElementById(a.getAttribute('href').slice(1));
+        self.closeSheet();
+        if (el) self.go(el);
+      });
+      document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !sheet.hidden) self.closeSheet(); });
+      var ticking = false;
+      window.addEventListener('scroll', function () {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(function () { ticking = false; self.track(); });
+      }, { passive: true });
+      this.track();
+    },
+
+    // 目前讀到哪一章：標題已經捲到工具列下方的最後一章
+    track: function () {
+      var cur = null;
+      for (var i = 0; i < this.chaps.length; i++) {
+        if (this.chaps[i].el.getBoundingClientRect().top <= 110) cur = this.chaps[i];
+        else break;
+      }
+      if (cur === this.cur) return;
+      this.cur = cur;
+      if (!cur) return;
+      // 捲回頁首時保留「剛剛讀到哪一章」，目錄和導覽列都還看得到
+      this.lastChap = cur;
+      $('#nav-cur').textContent = cur.id;
+      $$('.toc li.cur').forEach(function (li) { li.classList.remove('cur'); });
+      var a = $('.toc a[href="#c' + cur.id + '"]');
+      if (a) a.parentNode.classList.add('cur');
+    },
+
+    go: function (el) {
+      if (!el.offsetParent) {
+        // 被「只看未完成」藏起來的項目，先恢復顯示全部
+        document.body.classList.remove('only-todo');
+        $('#btn-todo').setAttribute('aria-pressed', 'false');
+      }
+      var chap = el.matches('section');
+      el.scrollIntoView({ block: chap ? 'start' : 'center' });
+      this.track();
+      if (!chap) {
+        el.classList.remove('flash');
+        void el.offsetWidth;
+        el.classList.add('flash');
+      }
+    },
+
+    openSheet: function (find) {
+      var q = $('#q');
+      $('#sheet').hidden = false;
+      document.documentElement.classList.add('noscroll');
+      this.search(q.value);
+      if (find) q.focus();
+      else { var li = $('#sheet-body li.cur'); if (li) li.scrollIntoView({ block: 'center' }); }
+    },
+
+    closeSheet: function () {
+      $('#sheet').hidden = true;
+      document.documentElement.classList.remove('noscroll');
+      $('#q').blur();
+    },
+
+    search: function (q) {
+      var self = this, body = $('#sheet-body');
+      q = q.trim();
+      if (!q) {
+        var h = '', open = false;
+        $$('#app h1.part, #app section.chap').forEach(function (el) {
+          if (el.tagName === 'H1') {
+            h += (open ? '</ol></div>' : '') + '<div class="tp"><b>' + esc(el.textContent) + '</b><ol>';
+            open = true;
+            return;
+          }
+          var id = el.getAttribute('data-chap'), c = self.chaps.filter(function (x) { return x.id === id; })[0];
+          h += '<li' + (self.lastChap && self.lastChap.id === id ? ' class="cur"' : '') + '><a href="#c' + id + '"><span class="cid">' + id
+            + '</span>' + esc(c ? c.title : '') + '</a><span class="cp" data-cp="' + id + '"></span></li>';
+        });
+        body.innerHTML = h + (open ? '</ol></div>' : '');
+        this.refresh();
+        return;
+      }
+      var lq = q.toLowerCase(), hits = [];
+      $$(BLOCKS).some(function (el) {
+        var t = textOf(el), i = t.toLowerCase().indexOf(lq);
+        if (i >= 0) hits.push({ el: el, t: t, i: i, c: el.closest('section.chap').getAttribute('data-chap') });
+        return hits.length >= 60;
+      });
+      this.hits = hits;
+      body.innerHTML = hits.length
+        ? hits.map(function (x, k) {
+          var a = Math.max(0, x.i - 18), b = x.i + q.length;
+          return '<a class="hit" href="#" data-k="' + k + '"><span class="cid">' + x.c + '</span>' + (a ? '…' : '')
+            + esc(x.t.slice(a, x.i)) + '<mark>' + esc(x.t.slice(x.i, b)) + '</mark>' + esc(x.t.slice(b, b + 44))
+            + (b + 44 < x.t.length ? '…' : '') + '</a>';
+        }).join('') + (hits.length >= 60 ? '<p class="nohit">只列出前 60 筆，換個更精確的字試試。</p>' : '')
+        : '<p class="nohit">找不到「' + esc(q) + '」。</p>';
+    },
+
+    today: function () {
+      var p = this.plan, n = new Date(), msg;
+      var key = n.getFullYear() + '-' + pad(n.getMonth() + 1) + '-' + pad(n.getDate());
+      var id = p.days[key];
+      if (id) msg = '今天 ' + (n.getMonth() + 1) + '/' + n.getDate();
+      else if (key < p.start) {
+        var d = Math.round((Date.parse(p.start + 'T00:00:00') - new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime()) / 864e5);
+        var c = p.countdown.filter(function (x) { return x[0] >= d; })[0] || p.countdown[p.countdown.length - 1];
+        id = c && c[1];
+        msg = '出發前 ' + d + ' 天';
+      } else { this.toast('旅程已經結束'); return; }
+      var ch = this.chaps.filter(function (x) { return x.id === id; })[0];
+      if (!ch) return;
+      this.toast(msg + ' → ' + ch.id + ' ' + ch.title);
+      this.go(ch.el);
+    },
+
+    toast: function (t) {
+      var el = $('#toast');
+      el.textContent = t;
+      el.hidden = false;
+      clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(function () { el.hidden = true; }, 3500);
     },
 
     renderStatus: function () {
