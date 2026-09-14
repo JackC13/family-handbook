@@ -9,7 +9,7 @@
 | `docs/` | 加密後的網站（`index.html`、離線快取 `sw.js`） | ✅ 只有加密後的內容 |
 | `build.py`、`encrypt.js`、`web/` | 產生網站的程式 | ✅ |
 | `apps-script/Code.gs` | 同步後端，貼到 Google Apps Script | ✅ |
-| `local.config.json` | 原稿路徑、同步網址、加密用 salt | ❌（`.gitignore`） |
+| `local.config.json` | 原稿路徑、同步網址、加密用 salt、標題與旅行日期（`start_date`／`end_date`，給「今天」按鈕用） | ❌（`.gitignore`） |
 | 原稿 `manual/*.md`、舊手冊、PDF | 在 repo 外面，不會被加進來 | ❌ |
 
 家庭密碼**不會**存在任何檔案裡。

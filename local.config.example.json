@@ -4,5 +4,7 @@
   "photos_json": "../new-chat/work/photos.json",
   "title": "旅行說明書",
   "subtitle": "出發日期 ・ 同行人數（只出現在加密後的網頁裡）",
+  "start_date": "YYYY-MM-DD（出發日，給「今天」按鈕用）",
+  "end_date": "YYYY-MM-DD（回程日）",
   "sync_url": ""
 }

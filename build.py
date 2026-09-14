@@ -17,6 +17,7 @@ import re
 import secrets
 import subprocess
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -130,7 +131,7 @@ def assign_ids(manual_dir):
                     line = f'{body} {{#{tid}}}'
                     added += 1
                 task = tid
-            elif line.startswith('  - 填寫：') and task:
+            elif line.startswith(('  - 填寫：', '  - 選擇：')) and task:
                 body, fid = split_id(line)
                 if not fid:
                     fid = next_id(f'{task}-f')
@@ -276,31 +277,55 @@ class Renderer:
             tid = f'missing-{len(self.fields)}'
         label = plain(text)
         self.field(tid, label, 'check')
-        subs = []
+        subs, fills = [], None
         i += 1
         while i < len(L) and L[i].startswith('  - '):
             sub = L[i].strip()[2:]
-            if sub.startswith('填寫：'):
-                body, fid = split_id(sub[3:])
-                if not fid:
-                    self.errors.append(f'{fname}：填寫欄沒有 ID：{body[:30]}')
-                    fid = f'missing-{len(self.fields)}'
-                h = '<div class="fill">'
-                for k, seg in enumerate([x.strip() for x in body.split('／') if x.strip()], 1):
-                    fk = f'{fid}-{k}'
-                    self.field(fk, f'{label[:40]}｜{seg}')
-                    h += f'<label class="fi"><span>{e(seg)}</span><input type="text" data-id="{fk}" autocomplete="off"></label>'
-                subs.append(h + '</div>')
-            elif sub.startswith('英文：'):
+            if sub.startswith(('填寫：', '選擇：')):
+                # 連續的填寫與選擇排在同一個區塊
+                if fills is None:
+                    fills = []
+                    subs.append(fills)
+                # 試算表的「項目」欄只放粗體標題，才看得出是哪一題
+                short = plain(m.group(1)) if (m := re.match(r'\*\*(.+?)\*\*', text)) else label
+                fills.extend(self.fill_rows(sub, short, fname))
+                i += 1
+                continue
+            fills = None
+            if sub.startswith('英文：'):
                 subs.append(f'<div class="en">{e(sub[3:])}</div>')
             elif sub.startswith('預約：'):
                 subs.append(self.link(sub[3:].strip(), 'book'))
             else:
                 subs.append(f'<small>{inline(sub)}</small>')
             i += 1
+        subs = ''.join(f'<div class="fill">{"".join(x)}</div>' if isinstance(x, list) else x for x in subs)
         self.emit(f'<div class="task"><input type="checkbox" id="{tid}" data-id="{tid}">'
-                  f'<div class="tx"><label for="{tid}">{inline(text)}</label>{"".join(subs)}</div></div>')
+                  f'<div class="tx"><label for="{tid}">{inline(text)}</label>{subs}</div></div>')
         return i
+
+    def fill_rows(self, sub, label, fname):
+        """填寫：甲／乙 → 每段一個輸入框；選擇：標籤｜甲／乙 → 一個下拉選單。"""
+        kind = sub[:2]
+        body, fid = split_id(sub[3:])
+        if not fid:
+            self.errors.append(f'{fname}：{kind}欄沒有 ID（先跑 python3 build.py --assign-ids）：{body[:30]}')
+            fid = f'missing-{len(self.fields)}'
+        if kind == '選擇':
+            name, _, opts = body.partition('｜')
+            name, opts = name.strip(), [x.strip() for x in opts.split('／') if x.strip()]
+            if not opts:
+                self.errors.append(f'{fname}：選擇沒有選項（格式：選擇：標籤｜甲／乙）：{body[:30]}')
+            self.field(fid, f'{label[:40]}｜{name}', 'choice')
+            return [f'<label class="fi"><span>{e(name)}</span><select data-id="{fid}">'
+                    '<option value="">還沒決定</option>' + ''.join(f'<option>{e(o)}</option>' for o in opts)
+                    + '</select></label>']
+        rows = []
+        for k, seg in enumerate([x.strip() for x in body.split('／') if x.strip()], 1):
+            fk = f'{fid}-{k}'
+            self.field(fk, f'{label[:40]}｜{seg}')
+            rows.append(f'<label class="fi"><span>{e(seg)}</span><input type="text" data-id="{fk}" autocomplete="off"></label>')
+        return rows
 
     def link(self, key, cls='lk'):
         key = key.strip()
@@ -376,7 +401,62 @@ class Renderer:
                  f'<h1 class="title">{html.escape(self.title)}</h1>'
                  f'<p class="legend">照時間排好的說明書，到了哪一天就看哪一章。打勾和填寫會先存在這台裝置，'
                  f'有網路時自動同步到共用的試算表。共 {n_check} 個勾選項。</p>')
-        return bar + intro + toc + ''.join(self.out) + '</div>'
+        return bar + intro + toc + ''.join(self.out) + '</div>' + self.dock()
+
+    def dock(self):
+        """手機下方的導覽列、目錄與搜尋面板；行為在 web/app.js 的 nav()。"""
+        ask = next((c for _, ch in self.toc for c, t in ch if '待確認' in t), None)
+        sos = next((ch[0][0] for t, ch in self.toc if '緊急' in t and ch), None)
+        return ('<nav class="dock" aria-label="快速導覽">'
+                '<button type="button" id="nav-toc"><i aria-hidden="true">📖</i>目錄<small id="nav-cur"></small></button>'
+                '<button type="button" id="nav-find"><i aria-hidden="true">🔍</i>搜尋</button>'
+                '<button type="button" id="nav-today"><i aria-hidden="true">📅</i>今天</button>'
+                + (f'<a href="#c{ask}"><i aria-hidden="true">❓</i>待確認</a>' if ask else '')
+                + (f'<a href="#c{sos}"><i aria-hidden="true">🆘</i>緊急</a>' if sos else '')
+                + '</nav>'
+                '<div class="sheet" id="sheet" hidden><div class="sheet-in" role="dialog" aria-modal="true" aria-label="目錄與搜尋">'
+                '<div class="sheet-hd"><input type="search" id="q" placeholder="搜尋地址、預約號、景點…" aria-label="搜尋說明書"'
+                ' autocomplete="off" enterkeyhint="search"><button type="button" id="sheet-x">關閉</button></div>'
+                '<div id="sheet-body"></div></div></div>'
+                '<div class="toast" id="toast" role="status" hidden></div>')
+
+
+def today_plan(toc, start, end):
+    """「今天」按鈕用的對照表：出發前對到倒數章節，旅途中每一天對到一章。
+    放在加密內容裡，所以日期不會出現在公開的原始碼。"""
+    if not (start and end):
+        return None
+    s, t = date.fromisoformat(start), date.fromisoformat(end)
+    chaps = [(cid, plain(title)) for _, ch in toc for cid, title in ch]
+    countdown, dated = [], {}
+    for order, (cid, title) in enumerate(chaps):
+        m = re.search(r'出發前\s*(?:\d+\s*[–-]\s*)?(\d+)\s*(週|小時)', title)
+        if m:
+            n = int(m.group(1))
+            # 「出發前 N 週」從第 N 週開始看；同一天數有兩章時取後面那章（例如 4–6 週排在 6 週之後）
+            countdown.append((n * 7 if m.group(2) == '週' else max(1, -(-n // 24)), -order, cid))
+        m = re.match(r'(\d{1,2})/(\d{1,2})（', title)
+        if m:
+            mo, dd = int(m.group(1)), int(m.group(2))
+            dated[date(s.year if mo >= s.month else s.year + 1, mo, dd)] = cid
+    # 沒有專屬章節的日子（長住期間）：抵達後一週內看「第一週」，週末看「週末」，其他看「平日」
+    first_week = next((c for c, x in chaps if '第一週' in x), None)
+    weekend = next((c for c, x in chaps if x.startswith('週末')), None)
+    weekday = next((c for c, x in chaps if x.startswith('平日')), None)
+    days, last, d = {}, None, s
+    while d <= t:
+        if d in dated:
+            last, pick = d, dated[d]
+        elif last and first_week and (d - last).days <= 7:
+            pick = first_week
+        elif d.weekday() >= 5 and weekend:
+            pick = weekend
+        else:
+            pick = weekday or (dated[last] if last else None)
+        if pick:
+            days[d.isoformat()] = pick
+        d += timedelta(days=1)
+    return {'start': start, 'countdown': [[n, c] for n, _, c in sorted(countdown)], 'days': days}
 
 
 # ---------- 加密與輸出 ----------
@@ -427,7 +507,9 @@ def main():
         out, pw, sync = ROOT / 'docs', ask_password(cfg), cfg.get('sync_url', '')
 
     payload = json.dumps({'title': r.title, 'html': body, 'fields': r.fields,
-                          'config': {'syncUrl': sync}}, ensure_ascii=False).encode()
+                          'config': {'syncUrl': sync,
+                                     'today': today_plan(r.toc, cfg.get('start_date'), cfg.get('end_date'))}},
+                         ensure_ascii=False).encode()
     enc = encrypt(payload, pw, cfg['enc_salt'])
     token = enc.pop('token')
 
